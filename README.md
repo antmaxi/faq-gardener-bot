@@ -22,6 +22,27 @@ cp .env.example .env
 
 `--dry-run` prints drafts and does not send or remember them.
 
+## Docker
+
+Same one-shot job, with CPU torch, the default embed model, and the Cursor extra already in the image. Copy `.env.example` to `.env` and fill in the keys you need first. Set `HF_TOKEN` there before `docker compose build` if Hub rate-limits anonymous downloads or the embed model is gated.
+
+The answer-bot database is mounted read-only from `ANSWERBOT_DATA_DIR` (default `../answer-chat-history-bot/data`, the directory that contains `answerbot.db` and its `-wal` / `-shm` files). This repo's `./data` holds `gardener.db` and the FAQ cache. Compose overrides `ANSWERBOT_DB`, `GARDENER_DB`, and `FAQ_CACHE` to those container paths.
+
+```bash
+mkdir -p data
+docker compose build
+docker compose run --rm gardener
+```
+
+Dry run, or a JSON export dropped into `./data`:
+
+```bash
+docker compose run --rm gardener python -m gardener run --dry-run
+docker compose run --rm gardener python -m gardener run --questions /data/questions.json --dry-run
+```
+
+There is no restart policy. The process exits when the run finishes. Ollama on the host: `OPENAI_BASE_URL=http://host.docker.internal:11434/v1`.
+
 ## What gets drafted
 
 A question is a candidate when `window_ids` is empty, or every id is positive (chat hits only; FAQ chunk ids are stored negative). Admins, very short texts, and clusters already sent are skipped. Default `MIN_CLUSTER_SIZE=2`, over the last `SINCE_DAYS` (14).
@@ -44,6 +65,12 @@ Use a separate bot token from the answer bot. Each id in `ADMIN_USER_IDS` must o
 
 ```cron
 0 8 * * * cd /path/to/faq-gardener-bot && .venv/bin/python -m gardener run
+```
+
+Or, with Docker:
+
+```cron
+0 8 * * * cd /path/to/faq-gardener-bot && docker compose run --rm gardener
 ```
 
 ## Tests

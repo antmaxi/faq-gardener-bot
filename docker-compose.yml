@@ -1,0 +1,32 @@
+name: faq-gardener-bot
+
+# One shot, not a resident process. `docker compose run --rm gardener` exits
+# after the drafts are sent. Do not add a restart policy: a successful run
+# ends, and restarting it would send again only when new clusters appear,
+# but a crash loop would also retry immediately.
+services:
+  gardener:
+    build:
+      context: .
+      secrets:
+        - HF_TOKEN
+    init: true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ANSWERBOT_DB: /answerbot/answerbot.db
+      GARDENER_DB: /data/gardener.db
+      FAQ_CACHE: /data/faq_index
+      HF_HOME: /opt/hf
+    volumes:
+      - ./data:/data
+      # Directory that holds answerbot.db plus its -wal/-shm companions.
+      # Read-only: this process opens the file with mode=ro.
+      - ${ANSWERBOT_DATA_DIR:-../answer-chat-history-bot/data}:/answerbot:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+secrets:
+  HF_TOKEN:
+    environment: HF_TOKEN
