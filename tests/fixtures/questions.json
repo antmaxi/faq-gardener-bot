@@ -1,0 +1,58 @@
+[
+  {
+    "ts": 200,
+    "question": "как оформить семейную страховку в Цюрихе",
+    "user_id": 5,
+    "window_ids": [],
+    "cited_ids": []
+  },
+  {
+    "ts": 190,
+    "question": "как оформить семейную страховку для детей",
+    "user_id": 6,
+    "window_ids": [1, 2],
+    "cited_ids": []
+  },
+  {
+    "ts": 180,
+    "question": "сколько стоила поездка на лыжах в феврале",
+    "user_id": 5,
+    "window_ids": [],
+    "cited_ids": []
+  },
+  {
+    "ts": 170,
+    "question": "сколько стоила поездка на лыжах в прошлом году",
+    "user_id": 6,
+    "window_ids": [3],
+    "cited_ids": []
+  },
+  {
+    "ts": 160,
+    "question": "как получить визу",
+    "user_id": 1,
+    "window_ids": [],
+    "cited_ids": []
+  },
+  {
+    "ts": 150,
+    "question": "а сколько",
+    "user_id": 5,
+    "window_ids": [],
+    "cited_ids": []
+  },
+  {
+    "ts": 140,
+    "question": "где подать документы на регистрацию",
+    "user_id": 5,
+    "window_ids": [-4, 8],
+    "cited_ids": [-4]
+  },
+  {
+    "ts": 10,
+    "question": "как открыть банковский счёт в Цюрихе",
+    "user_id": 5,
+    "window_ids": [],
+    "cited_ids": []
+  }
+]

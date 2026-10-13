@@ -1,0 +1,30 @@
+[project]
+name = "faq-gardener"
+version = "0.1.0"
+description = "Draft FAQ outlines from unanswered Telegram community questions"
+requires-python = ">=3.11"
+dependencies = [
+    "llama-index-core>=0.12",
+    "llama-index-embeddings-huggingface>=0.4",
+    "langgraph>=0.2",
+    "anthropic>=0.40",
+    "numpy>=1.26",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+cursor = ["cursor-sdk"]
+
+[project.scripts]
+faq-gardener = "gardener.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["gardener*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
