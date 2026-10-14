@@ -59,6 +59,8 @@ LlamaIndex embeds the wiki (`docs/` and `inbox/` markdown, chunked by heading) w
 
 Use a separate bot token from the answer bot. Each id in `ADMIN_USER_IDS` must open a chat with this bot once (`/start`). One gap is one message, split under 4096 characters. A fingerprint is stored in `data/gardener.db` only after at least one DM succeeds.
 
+While the watch process is running, any private message from an admin runs a dry run and replies in that chat. Those drafts are not saved, so a later scheduled pass can still send them. `docker compose run --rm gardener` exits, so it does not hear messages.
+
 ## Models
 
 `LLM_PROVIDER`:

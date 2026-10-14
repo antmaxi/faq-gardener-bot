@@ -21,7 +21,15 @@ from .faq_index import huggingface_embedder, index_pages, index_repo, pages_from
 from .graph import compile_graph
 from .llm import LLM, get_llm
 from .questions import load_export, load_sqlite
-from .telegram import notify
+from .telegram import (
+    admin_private_chats,
+    advance_offset,
+    format_message,
+    get_updates,
+    notify,
+    send_text,
+    split_message,
+)
 
 log = logging.getLogger("gardener")
 
@@ -38,6 +46,7 @@ def execute(
     embed_model=None,
     opener=None,
     now: float | None = None,
+    notify_admins: bool = True,
 ) -> dict:
     """Run one pass. Returns counts and the drafts that were produced."""
     since = settings.since_days if since_days is None else since_days
@@ -107,14 +116,16 @@ def execute(
             {"questions": [{"ts": q.ts, "text": q.text} for q in questions]}
         )
         drafts = list(result.get("drafts") or [])
-        delivered = notify(
-            settings.telegram_token,
-            sorted(settings.admin_ids),
-            drafts,
-            dry_run=dry_run,
-            conn=conn,
-            **({} if opener is None else {"opener": opener}),
-        )
+        delivered = 0
+        if notify_admins:
+            delivered = notify(
+                settings.telegram_token,
+                sorted(settings.admin_ids),
+                drafts,
+                dry_run=dry_run,
+                conn=conn,
+                **({} if opener is None else {"opener": opener}),
+            )
     finally:
         conn.close()
     return {"questions": len(questions), "drafts": drafts, "delivered": delivered}
@@ -128,6 +139,79 @@ def _report(summary: dict, *, dry_run: bool) -> int:
     if not dry_run and summary["drafts"] and summary["delivered"] == 0:
         return 1
     return 0
+
+
+_POLL_MAX = 25
+
+
+def reply_dry_run(
+    settings: Settings,
+    chat_id: int,
+    *,
+    opener=None,
+    **execute_kwargs,
+) -> dict:
+    """Run one dry pass and send the outlines to `chat_id`. Nothing is recorded."""
+    if not settings.telegram_token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+    send_kwargs = {} if opener is None else {"opener": opener}
+    send_text(settings.telegram_token, chat_id, "Checking for FAQ gaps…", **send_kwargs)
+    summary = execute(
+        settings,
+        dry_run=True,
+        notify_admins=False,
+        opener=opener,
+        **execute_kwargs,
+    )
+    drafts = list(summary.get("drafts") or [])
+    if not drafts:
+        send_text(
+            settings.telegram_token,
+            chat_id,
+            f"Dry run: questions={summary['questions']} drafts=0",
+            **send_kwargs,
+        )
+        return summary
+    for draft in drafts:
+        for part in split_message(format_message(draft)):
+            send_text(settings.telegram_token, chat_id, part, **send_kwargs)
+    return summary
+
+
+def pause_for_admin(
+    settings: Settings,
+    stop: threading.Event,
+    seconds: float,
+    *,
+    offset: int | None,
+    run_preview,
+    fetch=get_updates,
+) -> int | None:
+    """Wait out `seconds`, and run a dry-run reply when an admin writes."""
+    deadline = time.monotonic() + seconds
+    while not stop.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return offset
+        timeout = max(1, min(_POLL_MAX, int(remaining)))
+        try:
+            updates = fetch(settings.telegram_token, offset=offset, timeout=timeout)
+        except Exception:
+            log.exception("telegram poll failed")
+            if stop.wait(min(5.0, remaining)):
+                return offset
+            continue
+        offset = advance_offset(updates, offset)
+        for chat_id in dict.fromkeys(admin_private_chats(updates, settings.admin_ids)):
+            try:
+                run_preview(chat_id)
+            except Exception:
+                log.exception("dry run for %s failed", chat_id)
+                try:
+                    send_text(settings.telegram_token, chat_id, "Dry run failed.")
+                except Exception:
+                    log.warning("could not report the dry-run failure to %s", chat_id, exc_info=True)
+    return offset
 
 
 def watch(
@@ -144,13 +228,22 @@ def watch(
     embed_model=None,
     opener=None,
     now: float | None = None,
+    listen: bool = False,
 ) -> int:
-    """Repeat passes until `stop` is set. A failed pass is logged and retried."""
+    """Repeat passes until `stop` is set. A failed pass is logged and retried.
+
+    With `listen`, a private message from an admin during the pause runs a dry
+    run and replies in that chat. The preview is not recorded.
+    """
     if interval <= 0:
         raise ValueError("watch interval must be positive")
     held_embed = embed_model
     held_llm = llm
+    offset: int | None = None
+    hear = listen and bool(settings.telegram_token) and bool(settings.admin_ids)
     log.info("watching every %s seconds", interval)
+    if hear:
+        log.info("private messages from admins run a dry run and are not saved")
     while not stop.is_set():
         try:
             if held_embed is None:
@@ -175,7 +268,37 @@ def watch(
                 log.error("watch pass produced drafts but delivered none")
         except Exception:
             log.exception("watch pass failed")
-        if stop.is_set() or stop.wait(interval):
+        if hear:
+            def run_preview(chat_id: int) -> None:
+                nonlocal held_embed, held_llm
+                if held_embed is None:
+                    held_embed = huggingface_embedder(
+                        settings.embed_model, settings.hf_token, settings.embed_threads
+                    )
+                if held_llm is None:
+                    held_llm = get_llm(settings)
+                reply_dry_run(
+                    settings,
+                    chat_id,
+                    opener=opener,
+                    questions_path=questions_path,
+                    since_days=since_days,
+                    faq_dir=faq_dir,
+                    faq_pages=faq_pages,
+                    llm=held_llm,
+                    embed_model=held_embed,
+                )
+
+            offset = pause_for_admin(
+                settings,
+                stop,
+                interval,
+                offset=offset,
+                run_preview=run_preview,
+            )
+            if stop.is_set():
+                break
+        elif stop.is_set() or stop.wait(interval):
             break
     log.info("watch stopped")
     return 0
@@ -228,6 +351,7 @@ def main(argv: list[str] | None = None) -> int:
             questions_path=args.questions,
             since_days=args.since_days,
             faq_dir=args.faq_dir,
+            listen=True,
         )
     summary = execute(
         settings,

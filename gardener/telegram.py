@@ -1,4 +1,8 @@
-"""DM each FAQ gap to admins. One gap per message, split under Telegram's cap."""
+"""DM each FAQ gap to admins. One gap per message, split under Telegram's cap.
+
+The watch process also long-polls getUpdates. A private message from an admin
+runs a dry run and the reply is sent back to that chat.
+"""
 
 from __future__ import annotations
 
@@ -81,6 +85,57 @@ def send_text(
         raise RuntimeError(f"Telegram send to {chat_id} failed: {e.reason}") from e
     if not isinstance(body, dict) or not body.get("ok"):
         raise RuntimeError(f"Telegram send to {chat_id} was not accepted")
+
+
+def get_updates(
+    token: str,
+    *,
+    offset: int | None,
+    timeout: int,
+    opener=urllib.request.urlopen,
+) -> list[dict]:
+    """Long-poll private messages. `timeout` is Telegram's wait, in seconds."""
+    payload: dict = {"timeout": timeout, "allowed_updates": ["message"]}
+    if offset is not None:
+        payload["offset"] = offset
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/getUpdates",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with opener(req, timeout=timeout + 10) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"Telegram getUpdates failed: {e.code} {detail}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Telegram getUpdates failed: {e.reason}") from e
+    if not isinstance(body, dict) or not body.get("ok") or not isinstance(body.get("result"), list):
+        raise RuntimeError("Telegram getUpdates was not accepted")
+    return body["result"]
+
+
+def advance_offset(updates: list[dict], offset: int | None) -> int | None:
+    if not updates:
+        return offset
+    return max(int(item["update_id"]) for item in updates) + 1
+
+
+def admin_private_chats(updates: list[dict], admin_ids: set[int] | frozenset[int]) -> list[int]:
+    """Chat ids for private texts from admins, in arrival order."""
+    chats: list[int] = []
+    for update in updates:
+        message = update.get("message") or {}
+        chat = message.get("chat") or {}
+        if chat.get("type") != "private":
+            continue
+        user = (message.get("from") or {}).get("id")
+        text = str(message.get("text") or "").strip()
+        if not text or user is None or int(user) not in admin_ids:
+            continue
+        chats.append(int(chat["id"]))
+    return chats
 
 
 def notify(
