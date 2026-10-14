@@ -17,6 +17,7 @@ def settings(tmp_path: Path, **overrides) -> Settings:
         min_question_words=3,
         cluster_cosine=0.82,
         admin_ids=frozenset({1}),
+        debug=False,
         telegram_token="test-token",
         llm_provider="anthropic",
         anthropic_api_key=None,
@@ -29,6 +30,7 @@ def settings(tmp_path: Path, **overrides) -> Settings:
         hf_token=None,
         embed_threads=1,
         top_k=4,
+        watch_seconds=0,
     )
     base.update(overrides)
     return Settings(**base)

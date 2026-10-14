@@ -28,6 +28,22 @@ def _optional(raw: str | None) -> str | None:
     return text or None
 
 
+def _flag(raw: str | None) -> bool:
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _seconds(raw: str | None) -> int:
+    """Empty or unset is a single pass. A positive value is the pause between passes."""
+    if raw is None or not raw.strip():
+        return 0
+    value = int(raw)
+    if value < 0:
+        raise ValueError("WATCH_SECONDS must be >= 0")
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     answerbot_db: Path
@@ -40,6 +56,7 @@ class Settings:
     min_question_words: int
     cluster_cosine: float
     admin_ids: frozenset[int]
+    debug: bool
     telegram_token: str | None
     llm_provider: str
     anthropic_api_key: str | None
@@ -52,6 +69,7 @@ class Settings:
     hf_token: str | None
     embed_threads: int
     top_k: int
+    watch_seconds: int
 
     def model_name(self) -> str:
         if self.answer_model:
@@ -78,6 +96,7 @@ def load_settings() -> Settings:
         min_question_words=int(os.getenv("MIN_QUESTION_WORDS", "3")),
         cluster_cosine=float(os.getenv("CLUSTER_COSINE", "0.82")),
         admin_ids=_admins(os.getenv("ADMIN_USER_IDS")),
+        debug=_flag(os.getenv("DEBUG")),
         telegram_token=_optional(os.getenv("TELEGRAM_BOT_TOKEN")),
         llm_provider=provider,
         anthropic_api_key=_optional(os.getenv("ANTHROPIC_API_KEY")),
@@ -90,4 +109,5 @@ def load_settings() -> Settings:
         hf_token=_optional(os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")),
         embed_threads=int(os.getenv("EMBED_THREADS", "1")),
         top_k=int(os.getenv("FAQ_TOP_K", "4")),
+        watch_seconds=_seconds(os.getenv("WATCH_SECONDS")),
     )

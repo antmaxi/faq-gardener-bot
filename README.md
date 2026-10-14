@@ -41,11 +41,17 @@ docker compose run --rm gardener python -m gardener run --dry-run
 docker compose run --rm gardener python -m gardener run --questions /data/questions.json --dry-run
 ```
 
-There is no restart policy. The process exits when the run finishes. Ollama on the host: `OPENAI_BASE_URL=http://host.docker.internal:11434/v1`.
+`docker compose run --rm gardener` is one pass and exits. To keep checking without cron, leave the watch service up (default pause 3600 seconds, or `WATCH_SECONDS` from `.env`):
+
+```bash
+docker compose --profile watch up -d
+```
+
+`docker compose stop watch` ends it. Ollama on the host: `OPENAI_BASE_URL=http://host.docker.internal:11434/v1`.
 
 ## What gets drafted
 
-A question is a candidate when `window_ids` is empty, or every id is positive (chat hits only; FAQ chunk ids are stored negative). Admins, very short texts, and clusters already sent are skipped. Default `MIN_CLUSTER_SIZE=2`, over the last `SINCE_DAYS` (14).
+A question is a candidate when `window_ids` is empty, or every id is positive (chat hits only; FAQ chunk ids are stored negative). Admins, very short texts, and clusters already sent are skipped. Set `DEBUG=1` to include questions asked by `ADMIN_USER_IDS`. Default `MIN_CLUSTER_SIZE=2`, over the last `SINCE_DAYS` (14).
 
 LlamaIndex embeds the wiki (`docs/` and `inbox/` markdown, chunked by heading) with `intfloat/multilingual-e5-small` and retrieves the nearest sections. LangGraph grades each cluster as covered, partial, missing, or not a FAQ topic. Only partial and missing clusters are drafted.
 
@@ -63,15 +69,19 @@ Use a separate bot token from the answer bot. Each id in `ADMIN_USER_IDS` must o
 
 ## Schedule
 
+Leave `WATCH_SECONDS` empty to run once. Set it to keep a process polling; a cluster is sent once, and later passes only send new ones.
+
+```bash
+WATCH_SECONDS=3600 .venv/bin/python -m gardener run
+```
+
+Or cron for a single daily pass:
+
 ```cron
 0 8 * * * cd /path/to/faq-gardener-bot && .venv/bin/python -m gardener run
 ```
 
-Or, with Docker:
-
-```cron
-0 8 * * * cd /path/to/faq-gardener-bot && docker compose run --rm gardener
-```
+With Docker, the same daily pass is `docker compose run --rm gardener`. The background service is `docker compose --profile watch up -d`.
 
 ## Tests
 

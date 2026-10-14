@@ -1,31 +1,47 @@
 name: faq-gardener-bot
 
-# One shot, not a resident process. `docker compose run --rm gardener` exits
-# after the drafts are sent. Do not add a restart policy: a successful run
-# ends, and restarting it would send again only when new clusters appear,
-# but a crash loop would also retry immediately.
+# `gardener` is one shot: `docker compose run --rm gardener` exits after the
+# pass. It forces WATCH_SECONDS=0 and has no restart policy, so a failed run
+# does not immediately start again.
+#
+# `watch` (profile `watch`) repeats that pass. Clusters already delivered are
+# not sent again. `docker compose --profile watch up -d` leaves it running.
+x-gardener: &gardener
+  build:
+    context: .
+    secrets:
+      - HF_TOKEN
+  init: true
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - ./data:/data
+    # Directory that holds answerbot.db plus its -wal/-shm companions.
+    # Read-only: this process opens the file with mode=ro.
+    - ${ANSWERBOT_DATA_DIR:-../answer-chat-history-bot/data}:/answerbot:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+x-paths: &paths
+  ANSWERBOT_DB: /answerbot/answerbot.db
+  GARDENER_DB: /data/gardener.db
+  FAQ_CACHE: /data/faq_index
+  HF_HOME: /opt/hf
+
 services:
   gardener:
-    build:
-      context: .
-      secrets:
-        - HF_TOKEN
-    init: true
-    env_file:
-      - path: .env
-        required: false
+    <<: *gardener
     environment:
-      ANSWERBOT_DB: /answerbot/answerbot.db
-      GARDENER_DB: /data/gardener.db
-      FAQ_CACHE: /data/faq_index
-      HF_HOME: /opt/hf
-    volumes:
-      - ./data:/data
-      # Directory that holds answerbot.db plus its -wal/-shm companions.
-      # Read-only: this process opens the file with mode=ro.
-      - ${ANSWERBOT_DATA_DIR:-../answer-chat-history-bot/data}:/answerbot:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      <<: *paths
+      WATCH_SECONDS: "0"
+  watch:
+    <<: *gardener
+    profiles: ["watch"]
+    restart: unless-stopped
+    environment:
+      <<: *paths
+      WATCH_SECONDS: ${WATCH_SECONDS:-3600}
 
 secrets:
   HF_TOKEN:

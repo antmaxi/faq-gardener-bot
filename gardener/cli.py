@@ -1,10 +1,17 @@
-"""One-shot run: load questions, grade them against the FAQ, DM admins."""
+"""Load questions, grade them against the FAQ, and DM admins.
+
+One pass by default. WATCH_SECONDS keeps the process up and repeats the pass,
+so new clusters are sent without a cron trigger. Clusters already delivered
+are skipped.
+"""
 
 from __future__ import annotations
 
 import argparse
 import logging
 import os
+import signal
+import threading
 import time
 from pathlib import Path
 
@@ -35,18 +42,22 @@ def execute(
     """Run one pass. Returns counts and the drafts that were produced."""
     since = settings.since_days if since_days is None else since_days
     since_ts = int((now if now is not None else time.time()) - since * 86400)
+    # DEBUG keeps admin asks in the candidate set. Those ids are still the DM recipients.
+    gap_admin_ids: frozenset[int] = frozenset() if settings.debug else settings.admin_ids
+    if settings.debug:
+        log.info("debug mode: including questions asked by admins")
     if questions_path is not None:
         questions = load_export(
             questions_path,
             since_ts=since_ts,
-            admin_ids=settings.admin_ids,
+            admin_ids=gap_admin_ids,
             min_words=settings.min_question_words,
         )
     else:
         questions = load_sqlite(
             settings.answerbot_db,
             since_ts=since_ts,
-            admin_ids=settings.admin_ids,
+            admin_ids=gap_admin_ids,
             min_words=settings.min_question_words,
         )
     if not questions:
@@ -109,6 +120,76 @@ def execute(
     return {"questions": len(questions), "drafts": drafts, "delivered": delivered}
 
 
+def _report(summary: dict, *, dry_run: bool) -> int:
+    print(
+        f"questions={summary['questions']} drafts={len(summary['drafts'])} "
+        f"delivered={summary['delivered']}"
+    )
+    if not dry_run and summary["drafts"] and summary["delivered"] == 0:
+        return 1
+    return 0
+
+
+def watch(
+    settings: Settings,
+    *,
+    interval: int,
+    stop: threading.Event,
+    dry_run: bool = False,
+    questions_path: Path | None = None,
+    since_days: int | None = None,
+    faq_dir: Path | None = None,
+    faq_pages: dict[str, str] | None = None,
+    llm: LLM | None = None,
+    embed_model=None,
+    opener=None,
+    now: float | None = None,
+) -> int:
+    """Repeat passes until `stop` is set. A failed pass is logged and retried."""
+    if interval <= 0:
+        raise ValueError("watch interval must be positive")
+    held_embed = embed_model
+    held_llm = llm
+    log.info("watching every %s seconds", interval)
+    while not stop.is_set():
+        try:
+            if held_embed is None:
+                held_embed = huggingface_embedder(
+                    settings.embed_model, settings.hf_token, settings.embed_threads
+                )
+            if held_llm is None:
+                held_llm = get_llm(settings)
+            summary = execute(
+                settings,
+                dry_run=dry_run,
+                questions_path=questions_path,
+                since_days=since_days,
+                faq_dir=faq_dir,
+                faq_pages=faq_pages,
+                llm=held_llm,
+                embed_model=held_embed,
+                opener=opener,
+                now=now,
+            )
+            if _report(summary, dry_run=dry_run) != 0:
+                log.error("watch pass produced drafts but delivered none")
+        except Exception:
+            log.exception("watch pass failed")
+        if stop.is_set() or stop.wait(interval):
+            break
+    log.info("watch stopped")
+    return 0
+
+
+def _install_stop(stop: threading.Event) -> None:
+    def _handle(signum, _frame) -> None:
+        log.info("received signal %s; stopping after this pass", signum)
+        stop.set()
+
+    signal.signal(signal.SIGTERM, _handle)
+    signal.signal(signal.SIGINT, _handle)
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -121,21 +202,41 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--questions", type=Path, help="JSON export instead of the live answer-bot database")
     run.add_argument("--since-days", type=int, default=None)
     run.add_argument("--faq-dir", type=Path, help="local docs/ and inbox/ markdown instead of GitHub")
+    run.add_argument(
+        "--watch-seconds",
+        type=int,
+        default=None,
+        help="seconds between passes; 0 runs once (default: WATCH_SECONDS)",
+    )
     args = parser.parse_args(argv)
+    if args.watch_seconds is not None and args.watch_seconds < 0:
+        log.error("--watch-seconds must be >= 0")
+        return 2
+    settings = load_settings()
+    interval = settings.watch_seconds if args.watch_seconds is None else args.watch_seconds
+    if interval > 0 and args.dry_run:
+        log.error("dry-run is a single pass; leave WATCH_SECONDS unset")
+        return 2
+    if interval > 0:
+        stop = threading.Event()
+        _install_stop(stop)
+        return watch(
+            settings,
+            interval=interval,
+            stop=stop,
+            dry_run=args.dry_run,
+            questions_path=args.questions,
+            since_days=args.since_days,
+            faq_dir=args.faq_dir,
+        )
     summary = execute(
-        load_settings(),
+        settings,
         dry_run=args.dry_run,
         questions_path=args.questions,
         since_days=args.since_days,
         faq_dir=args.faq_dir,
     )
-    print(
-        f"questions={summary['questions']} drafts={len(summary['drafts'])} "
-        f"delivered={summary['delivered']}"
-    )
-    if not args.dry_run and summary["drafts"] and summary["delivered"] == 0:
-        return 1
-    return 0
+    return _report(summary, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
