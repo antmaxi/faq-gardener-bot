@@ -42,6 +42,11 @@ def test_debug_includes_admin_questions(tmp_path):
         now=86500,
     )
     assert summary["questions"] == 5
+    by_text = {row["text"]: row for row in summary["decisions"]}
+    assert by_text["как получить визу"]["label"] == "too_small"
+    assert "at least 2" in by_text["как получить визу"]["reason"]
+    assert by_text["как оформить семейную страховку в Цюрихе"]["label"] == "missing"
+    assert by_text["как оформить семейную страховку в Цюрихе"]["reason"]
 
 
 def test_dry_run_then_send_then_skip(tmp_path, capsys):

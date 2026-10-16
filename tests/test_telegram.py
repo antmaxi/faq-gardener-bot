@@ -6,9 +6,11 @@ from gardener.store import connect, seen
 from gardener.telegram import (
     admin_private_chats,
     advance_offset,
+    format_decision,
     format_message,
     get_updates,
     notify,
+    notify_decisions,
     split_message,
 )
 from tests.conftest import settings
@@ -21,6 +23,39 @@ DRAFT = {
     "questions": ["как оформить семейную страховку в Цюрихе"],
     "outline": "- TODO: какие кассы",
 }
+
+
+def test_decision_message_has_reason():
+    text = format_decision("как получить визу", "too_small", "1 similar question(s); a cluster needs at least 2")
+    assert "Question: как получить визу" in text
+    assert "Decision: too_small" in text
+    assert "Why: 1 similar question(s)" in text
+
+
+def test_notify_decisions_sends_each_question(tmp_path):
+    conn = connect(tmp_path / "s.db")
+    texts = []
+
+    def opener(req, timeout=None):
+        texts.append(json.loads(req.data.decode())["text"])
+        return _Resp()
+
+    notify_decisions(
+        "token",
+        [7],
+        [
+            {"text": "как получить визу", "label": "missing", "reason": "в выдержках нет ответа"},
+            {"text": "сколько стоила поездка", "label": "not_a_faq", "reason": ""},
+        ],
+        dry_run=False,
+        opener=opener,
+    )
+    assert "как получить визу" in texts[0]
+    assert "missing" in texts[0]
+    assert "в выдержках нет ответа" in texts[0]
+    assert "Why:" not in texts[1]
+    assert not seen(conn, "abc")
+    conn.close()
 
 
 def test_format_has_outline_and_no_user_id():

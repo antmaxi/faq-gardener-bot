@@ -103,4 +103,46 @@ def test_already_sent_cluster_is_skipped(tmp_path):
     result = graph.invoke({"questions": QUESTIONS})
     assert result["drafts"] == []
     assert seen(conn, fingerprint(insurance))
+    skipped = next(c for c in result["clusters"] if c["label"] == "already_sent")
+    assert skipped["reason"] == "this cluster was already sent"
+    conn.close()
+
+
+def test_singleton_is_too_small(tmp_path):
+    conn = connect(tmp_path / "g.db")
+    graph = compile_graph(
+        index=FakeIndex(),
+        llm=ScriptLLM(),
+        conn=conn,
+        min_cluster_size=2,
+        cluster_cosine=0.82,
+        top_k=4,
+    )
+    result = graph.invoke({"questions": [{"ts": 1, "text": "как получить визу"}]})
+    assert result["drafts"] == []
+    cluster = result["clusters"][0]
+    assert cluster["label"] == "too_small"
+    assert "at least 2" in cluster["reason"]
+    conn.close()
+
+
+def test_model_reason_is_kept(tmp_path):
+    class ReasonLLM(ScriptLLM):
+        def complete(self, system, user):
+            if "Task: grade" in user and "страхов" in user:
+                return '{"label": "partial", "reason": "раздел есть, ответа нет"}'
+            return super().complete(system, user)
+
+    conn = connect(tmp_path / "g.db")
+    graph = compile_graph(
+        index=FakeIndex(),
+        llm=ReasonLLM(),
+        conn=conn,
+        min_cluster_size=2,
+        cluster_cosine=0.82,
+        top_k=4,
+    )
+    result = graph.invoke({"questions": QUESTIONS})
+    partial = next(c for c in result["clusters"] if c["label"] == "partial")
+    assert partial["reason"] == "раздел есть, ответа нет"
     conn.close()

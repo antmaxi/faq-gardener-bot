@@ -33,7 +33,15 @@ Labels:
 - missing: nothing in the excerpts answers them
 - not_a_faq: the questions are one-off chat (a specific trip price, what a named person said, a private plan) and should not become a wiki page
 
-Reply with JSON only: {"label": "covered" | "partial" | "missing" | "not_a_faq"}"""
+Reply with JSON only: {"label": "covered" | "partial" | "missing" | "not_a_faq", "reason": "one short sentence"}
+Write the reason in the language of the questions. Cite only the excerpts."""
+
+_FALLBACK_REASON = {
+    "covered": "the excerpts already answer the questions",
+    "partial": "a related section does not answer them",
+    "missing": "nothing in the excerpts answers them",
+    "not_a_faq": "these questions should not become a wiki page",
+}
 
 DRAFT_SYSTEM = """You draft a wiki outline a person will paste into the community FAQ and finish.
 
@@ -75,7 +83,15 @@ def _excerpts_block(excerpts: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-def grade_label(llm, questions: list[str], excerpts: list[dict]) -> str:
+def _short_reason(text: str, limit: int = 500) -> str:
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip() + "…"
+
+
+def grade_label(llm, questions: list[str], excerpts: list[dict]) -> tuple[str, str]:
+    """Return (label, reason). Reason is the model's sentence, or a fallback."""
     listed = "\n".join(f"- {q}" for q in questions)
     user = (
         "Task: grade\n\n"
@@ -85,15 +101,16 @@ def grade_label(llm, questions: list[str], excerpts: list[dict]) -> str:
     try:
         data = parse_json_object(llm.complete(GRADE_SYSTEM, user))
         label = str(data.get("label") or "").strip().lower()
+        reason = _short_reason(str(data.get("reason") or ""))
     except (ValueError, json.JSONDecodeError, TypeError):
         log.warning("could not parse grade; treating cluster as partial")
-        return "partial"
+        return "partial", "could not parse the grade; treated as partial"
     if label not in _LABELS:
         log.warning("unknown grade %r; treating cluster as partial", label)
-        return "partial"
+        return "partial", f"unknown grade {label!r}; treated as partial"
     if not excerpts and label == "covered":
-        return "missing"
-    return label
+        return "missing", "no excerpts, so this is missing"
+    return label, reason or _FALLBACK_REASON[label]
 
 
 def draft_outline(llm, cluster: dict) -> tuple[str, str]:
@@ -132,29 +149,53 @@ def compile_graph(
         vectors = index.embed_queries(questions)
         pending = []
         for group in greedy_clusters(vectors, cluster_cosine):
-            if len(group) < min_cluster_size:
-                continue
             members = [questions[i] for i in group]
+            if len(group) < min_cluster_size:
+                pending.append(
+                    {
+                        "fingerprint": "",
+                        "questions": members,
+                        "skip": "too_small",
+                        "reason": (
+                            f"{len(members)} similar question(s); "
+                            f"a cluster needs at least {min_cluster_size}"
+                        ),
+                    }
+                )
+                continue
             fp = fingerprint(members)
             if seen(conn, fp):
                 log.info("skip already drafted cluster %s", fp[:12])
+                pending.append(
+                    {
+                        "fingerprint": fp,
+                        "questions": members,
+                        "skip": "already_sent",
+                        "reason": "this cluster was already sent",
+                    }
+                )
                 continue
-            pending.append({"fingerprint": fp, "questions": members})
+            pending.append({"fingerprint": fp, "questions": members, "skip": ""})
         return {"clusters": pending}
 
     def grade_node(state: State) -> dict:
         graded = []
         for cluster in state.get("clusters") or []:
+            skip = cluster.get("skip") or ""
+            if skip:
+                graded.append({**cluster, "label": skip, "excerpts": [], "nearest_url": None})
+                continue
             query = "\n".join(cluster["questions"])
             hits = index.retrieve(query, k=top_k)
             excerpts = [
                 {"heading": hit.heading, "url": hit.url, "text": hit.text} for hit in hits
             ]
-            label = grade_label(llm, cluster["questions"], excerpts)
+            label, reason = grade_label(llm, cluster["questions"], excerpts)
             graded.append(
                 {
                     **cluster,
                     "label": label,
+                    "reason": reason,
                     "excerpts": excerpts,
                     "nearest_url": excerpts[0]["url"] if excerpts else None,
                 }
@@ -188,3 +229,16 @@ def compile_graph(
     graph.add_edge("grade", "draft")
     graph.add_edge("draft", END)
     return graph.compile()
+
+
+def question_decisions(clusters: list[dict]) -> list[dict]:
+    """One row per question: text, the cluster decision, and the reason."""
+    rows = []
+    for cluster in clusters:
+        label = str(cluster.get("label") or "")
+        reason = str(cluster.get("reason") or "")
+        for question in cluster.get("questions") or []:
+            text = str(question).strip()
+            if text:
+                rows.append({"text": text, "label": label, "reason": reason})
+    return rows

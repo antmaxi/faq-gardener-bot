@@ -138,6 +138,48 @@ def admin_private_chats(updates: list[dict], admin_ids: set[int] | frozenset[int
     return chats
 
 
+def format_decision(question: str, label: str, reason: str) -> str:
+    """One question, the decision, and the reason when there is one."""
+    lines = [f"Question: {question}", f"Decision: {label}"]
+    if reason.strip():
+        lines.append(f"Why: {reason.strip()}")
+    return "\n".join(lines)
+
+
+def notify_decisions(
+    token: str | None,
+    admin_ids: list[int],
+    decisions: list[dict],
+    *,
+    dry_run: bool,
+    opener=urllib.request.urlopen,
+) -> None:
+    """DM each question's decision. Dry run prints. Nothing is recorded."""
+    for item in decisions:
+        parts = split_message(
+            format_decision(
+                str(item.get("text") or ""),
+                str(item.get("label") or ""),
+                str(item.get("reason") or ""),
+            )
+        )
+        if dry_run:
+            for part in parts:
+                print(part)
+                print("---")
+            continue
+        if not token:
+            raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+        if not admin_ids:
+            raise RuntimeError("ADMIN_USER_IDS is empty")
+        for admin_id in admin_ids:
+            try:
+                for part in parts:
+                    send_text(token, admin_id, part, opener=opener)
+            except RuntimeError:
+                log.warning("telegram decision to %s failed", admin_id, exc_info=True)
+
+
 def notify(
     token: str | None,
     admin_ids: list[int],

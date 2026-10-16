@@ -18,7 +18,7 @@ from pathlib import Path
 from . import store
 from .config import Settings, load_settings
 from .faq_index import huggingface_embedder, index_pages, index_repo, pages_from_dir
-from .graph import compile_graph
+from .graph import compile_graph, question_decisions
 from .llm import LLM, get_llm
 from .questions import load_export, load_sqlite
 from .telegram import (
@@ -27,6 +27,7 @@ from .telegram import (
     format_message,
     get_updates,
     notify,
+    notify_decisions,
     send_text,
     split_message,
 )
@@ -71,7 +72,7 @@ def execute(
         )
     if not questions:
         log.info("no FAQ candidate questions")
-        return {"questions": 0, "drafts": [], "delivered": 0}
+        return {"questions": 0, "drafts": [], "delivered": 0, "decisions": []}
 
     if not dry_run:
         if not settings.telegram_token:
@@ -116,7 +117,16 @@ def execute(
             {"questions": [{"ts": q.ts, "text": q.text} for q in questions]}
         )
         drafts = list(result.get("drafts") or [])
+        decisions = question_decisions(list(result.get("clusters") or []))
         delivered = 0
+        if settings.debug and notify_admins:
+            notify_decisions(
+                settings.telegram_token,
+                sorted(settings.admin_ids),
+                decisions,
+                dry_run=dry_run,
+                **({} if opener is None else {"opener": opener}),
+            )
         if notify_admins:
             delivered = notify(
                 settings.telegram_token,
@@ -128,7 +138,12 @@ def execute(
             )
     finally:
         conn.close()
-    return {"questions": len(questions), "drafts": drafts, "delivered": delivered}
+    return {
+        "questions": len(questions),
+        "drafts": drafts,
+        "delivered": delivered,
+        "decisions": decisions,
+    }
 
 
 def _report(summary: dict, *, dry_run: bool) -> int:
@@ -163,6 +178,14 @@ def reply_dry_run(
         opener=opener,
         **execute_kwargs,
     )
+    if settings.debug:
+        notify_decisions(
+            settings.telegram_token,
+            [chat_id],
+            list(summary.get("decisions") or []),
+            dry_run=False,
+            **send_kwargs,
+        )
     drafts = list(summary.get("drafts") or [])
     if not drafts:
         send_text(
