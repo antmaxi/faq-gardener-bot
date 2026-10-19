@@ -51,7 +51,7 @@ docker compose --profile watch up -d
 
 ## What gets drafted
 
-A question is a candidate when `window_ids` is empty, or every id is positive (chat hits only; FAQ chunk ids are stored negative). Admins, very short texts, and clusters already sent are skipped. Set `DEBUG=1` to include questions asked by `ADMIN_USER_IDS` and to DM each processed question with its decision and a short reason. Default `MIN_CLUSTER_SIZE=2`, over the last `SINCE_DAYS` (14).
+A question is a candidate unless `cited_ids` contains a FAQ chunk (those ids are negative). A chunk that was only retrieved stays a candidate; that list is `window_ids`. Admins, very short texts, and clusters already sent are skipped. Set `DEBUG=1` to include questions asked by `ADMIN_USER_IDS` and to DM each processed question with its decision and a short reason. Default `MIN_CLUSTER_SIZE=2`, over the last `SINCE_DAYS` (14).
 
 LlamaIndex embeds the wiki (`docs/` and `inbox/` markdown, chunked by heading) with `intfloat/multilingual-e5-small` and retrieves the nearest sections. LangGraph grades each cluster as covered, partial, missing, or not a FAQ topic. Only partial and missing clusters are drafted.
 

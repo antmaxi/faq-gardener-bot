@@ -1,8 +1,9 @@
 """Unanswered questions from the answer bot's query_log, or a JSON export.
 
-A row is a FAQ candidate when retrieval found nothing, or found only chat
-messages. FAQ chunk ids are stored as negative window ids. Admin asks and very
-short texts are dropped. The same question text is kept once, newest first.
+A row is a FAQ candidate unless the answer cited a wiki chunk. FAQ chunk ids
+are negative. Retrieved chunks in window_ids do not count; only cited_ids do.
+Admin asks and very short texts are dropped. The same question text is kept
+once, newest first.
 """
 
 from __future__ import annotations
@@ -25,12 +26,12 @@ def normalize(text: str) -> str:
     return " ".join(text.split()).strip().lower()
 
 
-def is_gap(window_ids: list[int]) -> bool:
-    """True when the wiki was not in the prompt (empty, or chat ids only)."""
-    return not window_ids or all(int(i) > 0 for i in window_ids)
+def is_gap(cited_ids: list[int]) -> bool:
+    """True unless the model answer cited a FAQ chunk."""
+    return all(int(i) > 0 for i in cited_ids)
 
 
-def _window_ids(raw) -> list[int]:
+def _id_list(raw) -> list[int]:
     if raw is None or raw == "":
         return []
     if isinstance(raw, list):
@@ -38,9 +39,9 @@ def _window_ids(raw) -> list[int]:
     if isinstance(raw, str):
         parsed = json.loads(raw)
         if not isinstance(parsed, list):
-            raise ValueError("window_ids must be a list")
+            raise ValueError("id list must be a list")
         return [int(i) for i in parsed]
-    raise TypeError(f"window_ids must be a list or JSON string, not {type(raw).__name__}")
+    raise TypeError(f"id list must be a list or JSON string, not {type(raw).__name__}")
 
 
 def filter_rows(
@@ -66,10 +67,10 @@ def filter_rows(
         if len(text.split()) < min_words:
             continue
         try:
-            windows = _window_ids(row.get("window_ids"))
+            cited = _id_list(row.get("cited_ids"))
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
-        if not is_gap(windows):
+        if not is_gap(cited):
             continue
         key = normalize(text)
         current = best.get(key)
@@ -96,19 +97,19 @@ def load_sqlite(
     try:
         try:
             rows = conn.execute(
-                """SELECT ts, question, user_id, window_ids
+                """SELECT ts, question, user_id, cited_ids
                    FROM query_log WHERE ts >= ?""",
                 (since_ts,),
             ).fetchall()
         except sqlite3.OperationalError as e:
             raise RuntimeError(
-                f"{path} has no readable query_log (ts, question, user_id, window_ids)"
+                f"{path} has no readable query_log (ts, question, user_id, cited_ids)"
             ) from e
     finally:
         conn.close()
     payload = [
-        {"ts": ts, "question": question, "user_id": user_id, "window_ids": window_ids}
-        for ts, question, user_id, window_ids in rows
+        {"ts": ts, "question": question, "user_id": user_id, "cited_ids": cited_ids}
+        for ts, question, user_id, cited_ids in rows
     ]
     return filter_rows(payload, since_ts=since_ts, admin_ids=admin_ids, min_words=min_words)
 
@@ -120,7 +121,7 @@ def load_export(
     admin_ids: set[int] | frozenset[int],
     min_words: int,
 ) -> list[Question]:
-    """JSON list of query_log-shaped objects. Missing window_ids counts as a gap."""
+    """JSON list of query_log-shaped objects. Missing cited_ids counts as a gap."""
     if not path.is_file():
         raise FileNotFoundError(f"questions export not found: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -131,7 +132,7 @@ def load_export(
         if not isinstance(item, dict):
             continue
         row = dict(item)
-        if "window_ids" not in row:
-            row["window_ids"] = []
+        if "cited_ids" not in row:
+            row["cited_ids"] = []
         rows.append(row)
     return filter_rows(rows, since_ts=since_ts, admin_ids=admin_ids, min_words=min_words)

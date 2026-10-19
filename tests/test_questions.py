@@ -22,6 +22,37 @@ def test_export_filters_gaps_admins_and_short_text():
     ]
 
 
+def test_retrieved_faq_stays_a_gap_until_the_answer_cites_it():
+    found_only = filter_rows(
+        [
+            {
+                "ts": 5,
+                "question": "как оформить семейную страховку",
+                "window_ids": [-4, 8],
+                "cited_ids": [8],
+            }
+        ],
+        since_ts=0,
+        admin_ids=set(),
+        min_words=3,
+    )
+    cited = filter_rows(
+        [
+            {
+                "ts": 5,
+                "question": "как оформить семейную страховку",
+                "window_ids": [-4, 8],
+                "cited_ids": [-4],
+            }
+        ],
+        since_ts=0,
+        admin_ids=set(),
+        min_words=3,
+    )
+    assert len(found_only) == 1
+    assert cited == []
+
+
 def test_missing_window_ids_count_as_a_gap():
     kept = filter_rows(
         [{"ts": 5, "question": "как устроить ребёнка в сад", "user_id": 9}],
