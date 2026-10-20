@@ -125,6 +125,7 @@ def execute(
                 sorted(settings.admin_ids),
                 decisions,
                 dry_run=dry_run,
+                conn=conn,
                 **({} if opener is None else {"opener": opener}),
             )
         if notify_admins:
@@ -166,7 +167,7 @@ def reply_dry_run(
     opener=None,
     **execute_kwargs,
 ) -> dict:
-    """Run one dry pass and send the outlines to `chat_id`. Nothing is recorded."""
+    """Run one pass and reply in `chat_id`. Delivered gaps and decisions are recorded."""
     if not settings.telegram_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
     send_kwargs = {} if opener is None else {"opener": opener}
@@ -178,26 +179,41 @@ def reply_dry_run(
         opener=opener,
         **execute_kwargs,
     )
-    if settings.debug:
-        notify_decisions(
-            settings.telegram_token,
-            [chat_id],
-            list(summary.get("decisions") or []),
-            dry_run=False,
-            **send_kwargs,
-        )
-    drafts = list(summary.get("drafts") or [])
-    if not drafts:
-        send_text(
-            settings.telegram_token,
-            chat_id,
-            f"Dry run: questions={summary['questions']} drafts=0",
-            **send_kwargs,
-        )
-        return summary
-    for draft in drafts:
-        for part in split_message(format_message(draft)):
-            send_text(settings.telegram_token, chat_id, part, **send_kwargs)
+    conn = store.connect(settings.gardener_db)
+    try:
+        if settings.debug:
+            notify_decisions(
+                settings.telegram_token,
+                [chat_id],
+                list(summary.get("decisions") or []),
+                dry_run=False,
+                conn=conn,
+                **send_kwargs,
+            )
+        drafts = list(summary.get("drafts") or [])
+        if not drafts:
+            send_text(
+                settings.telegram_token,
+                chat_id,
+                f"Dry run: questions={summary['questions']} drafts=0",
+                **send_kwargs,
+            )
+            return summary
+        for draft in drafts:
+            try:
+                for part in split_message(format_message(draft)):
+                    send_text(settings.telegram_token, chat_id, part, **send_kwargs)
+            except RuntimeError:
+                log.warning("dry-run outline to %s failed", chat_id, exc_info=True)
+                continue
+            store.mark(
+                conn,
+                draft["fingerprint"],
+                draft["heading"],
+                list(draft.get("questions") or []),
+            )
+    finally:
+        conn.close()
     return summary
 
 

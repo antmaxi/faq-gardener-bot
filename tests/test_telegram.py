@@ -2,7 +2,7 @@ import json
 import urllib.error
 
 from gardener.cli import pause_for_admin, reply_dry_run
-from gardener.store import connect, seen
+from gardener.store import connect, reported, decision_key, seen
 from gardener.telegram import (
     admin_private_chats,
     advance_offset,
@@ -55,6 +55,35 @@ def test_notify_decisions_sends_each_question(tmp_path):
     assert "в выдержках нет ответа" in texts[0]
     assert "Why:" not in texts[1]
     assert not seen(conn, "abc")
+    conn.close()
+
+
+def test_notify_decisions_skips_a_repeated_label(tmp_path):
+    conn = connect(tmp_path / "s.db")
+    texts = []
+
+    def opener(req, timeout=None):
+        texts.append(json.loads(req.data.decode())["text"])
+        return _Resp()
+
+    decisions = [
+        {"text": "Как получить визу", "label": "too_small", "reason": "need 2"},
+    ]
+    notify_decisions("token", [7], decisions, dry_run=False, conn=conn, opener=opener)
+    notify_decisions("token", [7], decisions, dry_run=False, conn=conn, opener=opener)
+    notify_decisions(
+        "token",
+        [7],
+        [{"text": "как получить визу", "label": "missing", "reason": "no page"}],
+        dry_run=False,
+        conn=conn,
+        opener=opener,
+    )
+    assert len(texts) == 2
+    assert "too_small" in texts[0]
+    assert "missing" in texts[1]
+    assert reported(conn, decision_key("как получить визу", "too_small"))
+    assert reported(conn, decision_key("Как получить визу", "missing"))
     conn.close()
 
 

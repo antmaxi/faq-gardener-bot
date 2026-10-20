@@ -152,16 +152,24 @@ def notify_decisions(
     decisions: list[dict],
     *,
     dry_run: bool,
+    conn: sqlite3.Connection | None = None,
     opener=urllib.request.urlopen,
 ) -> None:
-    """DM each question's decision. Dry run prints. Nothing is recorded."""
+    """DM each question's decision. Skip a question whose label was already delivered.
+
+    A dry run prints every decision and does not record it. A label is recorded
+    only after at least one admin DM succeeds, so a failed run retries. The same
+    question with a new label is sent again.
+    """
     for item in decisions:
+        text = str(item.get("text") or "")
+        label = str(item.get("label") or "")
+        key = store.decision_key(text, label)
+        if conn is not None and not dry_run and store.reported(conn, key):
+            log.info("skip already reported %s %s", label, text[:40])
+            continue
         parts = split_message(
-            format_decision(
-                str(item.get("text") or ""),
-                str(item.get("label") or ""),
-                str(item.get("reason") or ""),
-            )
+            format_decision(text, label, str(item.get("reason") or ""))
         )
         if dry_run:
             for part in parts:
@@ -172,12 +180,16 @@ def notify_decisions(
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
         if not admin_ids:
             raise RuntimeError("ADMIN_USER_IDS is empty")
+        ok = False
         for admin_id in admin_ids:
             try:
                 for part in parts:
                     send_text(token, admin_id, part, opener=opener)
+                ok = True
             except RuntimeError:
                 log.warning("telegram decision to %s failed", admin_id, exc_info=True)
+        if ok and conn is not None:
+            store.mark_reported(conn, text, label)
 
 
 def notify(
