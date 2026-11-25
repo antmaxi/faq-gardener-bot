@@ -57,15 +57,16 @@ def seed_archive(path):
             CREATE TABLE messages(chat_id, msg_id, ts, sender_id, text, reply_to);
             INSERT INTO messages VALUES (-100123, 1, 11, 2, 'Renew membership?', NULL);
             INSERT INTO messages VALUES (-100123, 2, 12, 3, 'Renew at the desk', 1);
-            INSERT INTO messages VALUES (-100123, 3, 13, 4, 'Renew online', NULL);
-            INSERT INTO messages VALUES (-100123, 4, 86399, 2, 'Can I transfer it?', NULL);
-            INSERT INTO messages VALUES (-100123, 5, 86400, 3, 'Thanks for asking', 4);
-            INSERT INTO messages VALUES (-100123, 6, -1000, 3, 'The office is on the second floor.', NULL);
+            INSERT INTO messages VALUES (-100123, 3, 86411, 4, 'Renew online', NULL);
+            INSERT INTO messages VALUES (-100123, 4, 86412, 4, 'Too late to infer', NULL);
+            INSERT INTO messages VALUES (-100789, 4, 86399, 2, 'Can I transfer it?', NULL);
+            INSERT INTO messages VALUES (-100789, 5, 86400, 3, 'Thanks for asking', 4);
+            INSERT INTO messages VALUES (-100789, 6, -1000, 3, 'The office is on the second floor.', NULL);
             INSERT INTO messages VALUES (-100123, 7, 100000, 2, 'How do I request a refund?', NULL);
             INSERT INTO messages VALUES (-100123, 8, 100001, 3, 'Fill out form 17.', 7);
             INSERT INTO messages VALUES (-100456, 1, 11, 2, 'Excluded group question?', NULL);
             CREATE TABLE windows(id INTEGER PRIMARY KEY, chat_id, first_msg, last_msg);
-            INSERT INTO windows VALUES (1, -100123, 6, 6);
+            INSERT INTO windows VALUES (1, -100789, 6, 6);
             INSERT INTO windows VALUES (2, -100456, 1, 1);
         """)
 
@@ -102,7 +103,7 @@ def test_admin_reviews_and_edits_archived_questions(tmp_path, monkeypatch):
         raise AssertionError("The admin command failed.")
 
     monkeypatch.setattr("gardener.cli.send_text", unexpected_error)
-    cfg = settings(tmp_path, faq_chat_ids=frozenset({-100123}), min_question_words=2)
+    cfg = settings(tmp_path, faq_chat_ids=frozenset({-100123, -100789}), min_question_words=2)
     seed_archive(cfg.answerbot_db)
     original = cfg.answerbot_db.read_bytes()
     with closing(connect(cfg.gardener_db)) as conn:
@@ -119,7 +120,7 @@ def test_admin_reviews_and_edits_archived_questions(tmp_path, monkeypatch):
         update(7, "/review_open q:1"),
         update(8, "/review_save q:1"),
         update(9, "/review_open q:3"),
-        update(10, "/review_open g:-100123:4"),
+        update(10, "/review_open g:-100789:4"),
         update(11, "Check for FAQ gaps"),
         update(19, "/review_open q:4"),
     ])
@@ -135,7 +136,7 @@ def test_admin_reviews_and_edits_archived_questions(tmp_path, monkeypatch):
     assert "Inferred match · https://t.me/c/123/3" in sent[2]
     assert "No chat answer found" in sent[4] and "Visit the reception desk." in sent[4]
     assert "Suggested answer" not in sent[4]
-    assert "https://t.me/c/123/6" in sent[6] and "Visit the second floor." in sent[6]
+    assert "https://t.me/c/789/6" in sent[6] and "Visit the second floor." in sent[6]
     assert "No chat answer found" in sent[7] and "Unsupported text" not in sent[7]
     assert "Suggested answer\nFill out form 17." in sent[8]
     assert "Inferred match · https://t.me/c/123/8" in sent[8]

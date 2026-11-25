@@ -83,7 +83,7 @@ Questions asked once and questions already shown in an automatic report are avai
 
 Set `FAQ_CHAT_IDS` to a comma-separated list of group IDs that the answer bot archives. Each database pass reads those groups within `SINCE_DAYS` alongside the query log. An empty list disables archive scanning. An explicit `--questions` export remains a standalone input.
 
-The configured LLM reads selected chat messages to identify questions and clear requests for help. Two distinct wordings on a topic (by default) can trigger a FAQ coverage check, including unanswered questions. A draft includes direct replies and flags inferred answers from the next six messages within 15 minutes in the same group. Admins receive the source text and message references. The drafting prompt leaves conflicting details open for review.
+The configured LLM reads selected chat messages to identify questions and clear requests for help. Two distinct wordings on a topic (by default) can trigger a FAQ coverage check, including unanswered questions. Scheduled discovery and historical review include direct replies and flag inferred answers from the next six messages posted within 24 hours in the same group. Admins receive the source text and message references. The drafting prompt leaves conflicting details open for review.
 
 ## Models
 

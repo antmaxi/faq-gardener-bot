@@ -20,11 +20,11 @@ def test_selected_chat_evidence_reaches_admin_preview(tmp_path):
             (-100123, 1, 100, 7, "Where do I renew?", None),
             (-100123, 2, 101, 7, "I need help renewing", None),
             (-100123, 3, 102, 8, "At the desk", 1),
-            (-100123, 4, 103, 9, "Renew online now", None),
+            (-100123, 4, 86500, 9, "Renew online now", None),
             (-100123, 5, 104, 9, "Different thread", 99),
             (-100123, 7, 105, 7, "Renew where?", None),
-            (-100123, 6, 1500, 9, "Too late to infer", None),
-            (-100456, 4, 103, 8, "Unselected group", None),
+            (-100123, 6, 86501, 9, "Too late to infer", None),
+            (-100456, 4, 86500, 8, "Unselected group", None),
         ]
         conn.executemany("INSERT INTO messages VALUES (?,?,?,?,?,?)", rows)
         conn.commit()
@@ -42,7 +42,7 @@ def test_selected_chat_evidence_reaches_admin_preview(tmp_path):
             return '{"heading":"Renewal", "outline":"Verify whether renewal moved online."}'
 
     result = execute(cfg, dry_run=True, llm=Model(), embed_model=KeywordEmbedding(),
-                     faq_pages={"docs/other.md": "# Other\nOther FAQ topic."}, now=1600)
+                     faq_pages={"docs/other.md": "# Other\nOther FAQ topic."}, now=86501)
     assert result["questions"] == 2
     draft, = result["drafts"]
     assert {(s["message_id"], s["kind"]) for s in draft["sources"]} == {
