@@ -1,8 +1,6 @@
 # faq-gardener-bot
 
-Reads questions the [answer-chat-history-bot](https://github.com/antmaxi/answer-chat-history-bot) could not ground in the [ru-ch/faq](https://github.com/ru-ch/faq) wiki, clusters the ones that repeat, and DMs admins a paste-ready outline.
-
-The outline is a heading, the nearest existing page, up to three example questions, and a TODO list. It does not invent procedures, prices, or legal steps. Nothing is written to GitHub.
+Gardener finds gaps in the [ru-ch/faq](https://github.com/ru-ch/faq) wiki using questions from the [answer-chat-history-bot](https://github.com/antmaxi/answer-chat-history-bot) query log and selected archived Telegram groups. It clusters similar questions and sends drafts to admins. In watch mode, admins can also browse and search past questions, check chat answers and FAQ coverage, and save suggestions for later editing.
 
 ## Setup
 
@@ -21,6 +19,8 @@ cp .env.example .env
 ```
 
 `--dry-run` prints drafts and does not send or remember them.
+
+Set `FAQ_CHAT_IDS` to a comma-separated list of group IDs archived by the answer bot. An empty list disables group archive scanning. An explicit `--questions` export supplies the entire input for that pass.
 
 ## Docker
 
@@ -51,15 +51,20 @@ docker compose --profile watch up -d
 
 ## What gets drafted
 
-A question is a candidate unless `cited_ids` contains a FAQ chunk (those ids are negative). A chunk that was only retrieved stays a candidate; that list is `window_ids`. Admins, very short texts, and clusters already sent are skipped. Set `DEBUG=1` to include questions asked by `ADMIN_USER_IDS` and to DM each processed question with its decision and a short reason. Default `MIN_CLUSTER_SIZE=2`, over the last `SINCE_DAYS` (14).
+- **Answer bot query log.** A question is a candidate unless the bot cited a FAQ chunk (a negative ID in `cited_ids`). FAQ chunks that the bot only retrieved appear in `window_ids` and leave the question eligible.
+- **Selected group archives.** The configured model identifies explicit questions and clear requests for help, including those phrased as statements. A question can qualify whether or not someone answered it.
 
-LlamaIndex embeds the wiki (`docs/` and `inbox/` markdown, chunked by heading) with `intfloat/multilingual-e5-small` and retrieves the nearest sections. LangGraph grades each cluster as covered, partial, missing, or not a FAQ topic. Only partial and missing clusters are drafted.
+Each pass checks the last `SINCE_DAYS` (14 by default). The default `MIN_CLUSTER_SIZE` is two distinct question texts on a topic. Repeated wording counts once after normalizing case and whitespace. The scheduled pass filters short questions and questions from admins. Set `DEBUG=1` to include questions from `ADMIN_USER_IDS` and DM each processed question’s decision and reason.
+
+LlamaIndex embeds the wiki (`docs/` and `inbox/` Markdown, chunked by heading) with `intfloat/multilingual-e5-small` and retrieves the nearest sections. LangGraph checks FAQ coverage. Gardener drafts only partial or missing topics and skips clusters already delivered.
+
+A draft includes a heading, the nearest FAQ page when available, and up to three example questions. It can suggest answer text grounded in archived replies or give the admin a list of details to verify. Gardener shows source references for archived questions and replies, labels inferred answers, and asks the admin to resolve conflicting claims. For a group question, it checks direct replies and can infer answers from the next six messages in that group within 24 hours.
 
 ## Telegram
 
 Use a separate bot token from the answer bot. Each id in `ADMIN_USER_IDS` must open a chat with this bot once (`/start`). One gap is one message, split under 4096 characters. A fingerprint is stored in `data/gardener.db` only after at least one DM succeeds.
 
-While the watch process is running, any private message from an admin runs a pass and replies in that chat. A gap or a question decision already delivered is not sent again. The same question is sent again when its decision changes. `docker compose run --rm gardener` exits, so it does not hear messages. A command-line `--dry-run` still only prints and does not remember what it printed.
+While the watch process is running, the review commands below open historical review. Other private messages from admins run a pass and return the results in that chat. A gap or a question decision already delivered is not sent again. The same question is sent again when its decision changes. `docker compose run --rm gardener` exits, so it does not hear messages. A command-line `--dry-run` still only prints and does not remember what it printed.
 
 ### Review past questions
 
@@ -77,13 +82,18 @@ In watch mode, send these commands to Gardener in a private admin chat. Dates us
 
 Each page checks a batch of messages. A page can have no questions and still offer a next page. Search filters by text before checking messages.
 
-Questions asked once and questions already shown in an automatic report are available for manual review. A recorded bot response appears as context. Suggested answers use source messages from `FAQ_CHAT_IDS`. Admins can also save a question with its answer left open. Saved suggestions and edits live in `GARDENER_DB`.
+Manual review includes questions asked once and questions already shown in an automatic report. The card shows chat answer status and current FAQ coverage separately, with source references where available. A recorded bot response appears as context. For questions from the query log, Gardener also searches the selected groups for supporting chat messages.
 
-### Do questions asked directly in the group trigger it?
+Admins can save a chat-backed suggestion or leave the answer open for later editing. Saved suggestions and edits live in `GARDENER_DB`. Admins publish FAQ changes separately.
 
-Set `FAQ_CHAT_IDS` to a comma-separated list of group IDs that the answer bot archives. Each database pass reads those groups within `SINCE_DAYS` alongside the query log. An empty list disables archive scanning. An explicit `--questions` export remains a standalone input.
+## Improvement ideas
 
-The configured LLM reads selected chat messages to identify questions and clear requests for help. Two distinct wordings on a topic (by default) can trigger a FAQ coverage check, including unanswered questions. Scheduled discovery and historical review include direct replies and flag inferred answers from the next six messages posted within 24 hours in the same group. Admins receive the source text and message references. The drafting prompt leaves conflicting details open for review.
+1. **Collect messages live from selected groups outside the archive.** Add a group handler with its own allowlist. Persist messages and edits before advancing a durable update offset, deduplicate by chat and message ID, and run grading separately from collection. Preserve topic IDs where available.
+2. **Allow time for replies before sending a draft.** Add a configurable delay so community answers have time to arrive before Gardener notifies admins.
+3. **Rank recurring demand.** Track occurrences and distinct askers separately from unique wording. Rank gaps by frequency, distinct askers, and recency. Use a stable topic ID to avoid repeat proposals when the wording changes.
+4. **Add review actions and a digest.** Let admins dismiss, snooze, link, or resolve topics. Offer a daily digest of the highest-priority gaps and recheck resolved topics after relevant FAQ edits.
+5. **Track scan health and quality.** Report collection totals, rejected candidates, pending clusters, and the last successful pass. Retry malformed model responses and flag repeated failures for review. Evaluate question detection and coverage grading against labeled examples.
+6. **Offer opt-in replies in groups.** Use a confidence threshold and per-topic cooldown for automatic public FAQ replies.
 
 ## Models
 
