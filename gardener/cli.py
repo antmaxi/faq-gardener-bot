@@ -75,7 +75,8 @@ def execute(
     if questions_path is None and settings.faq_chat_ids:
         llm = llm or get_llm(settings)
         archived, evidence = load_chat(
-            settings.answerbot_db, settings.faq_chat_ids, since_ts, gap_admin_ids, llm
+            settings.answerbot_db, settings.faq_chat_ids, since_ts, gap_admin_ids, llm,
+            min_words=settings.min_question_words,
         )
         unique = {}
         for question in sorted(questions + archived, key=lambda q: q.ts, reverse=True):

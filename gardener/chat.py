@@ -21,7 +21,7 @@ Return JSON only: {"questions":[1], "answers":[[question_id,answer_id]]}.
 Return empty arrays when appropriate."""
 
 
-def _classify(messages, admin_ids, llm):
+def _classify(messages, admin_ids, min_words, llm):
     selected = {}
     inferred = {}
     for start in range(0, len(messages), _BATCH):
@@ -33,7 +33,12 @@ def _classify(messages, admin_ids, llm):
             raise ValueError("invalid chat discovery response")
         ids = {i for i in result["questions"] if type(i) is int}
         for m in batch:
-            if m["msg_id"] in ids and m["sender_id"] not in admin_ids and not m["text"].startswith("/"):
+            if (
+                m["msg_id"] in ids
+                and m["sender_id"] not in admin_ids
+                and not m["text"].lstrip().startswith("/")
+                and len(m["text"].split()) >= min_words
+            ):
                 selected[m["msg_id"]] = m
         positions = {m["msg_id"]: i for i, m in enumerate(context)}
         batch_ids = {m["msg_id"] for m in batch}
@@ -50,7 +55,7 @@ def _classify(messages, admin_ids, llm):
     return selected, inferred
 
 
-def load_chat(path, chat_ids, since_ts, admin_ids, llm):
+def load_chat(path, chat_ids, since_ts, admin_ids, llm, *, min_words):
     questions = []
     evidence = defaultdict(list)
     with closing(sqlite3.connect(_ro_uri(path), uri=True)) as conn:
@@ -61,8 +66,14 @@ def load_chat(path, chat_ids, since_ts, admin_ids, llm):
                    WHERE chat_id = ? AND ts >= ? AND trim(text) != ''
                    ORDER BY ts, msg_id""", (chat_id, since_ts)
             )]
-            selected, inferred = _classify(messages, admin_ids, llm)
-            questions.extend(Question(m["ts"], m["text"], m["sender_id"]) for m in selected.values())
+            selected, inferred = _classify(messages, admin_ids, min_words, llm)
+            for m in selected.values():
+                question = m["text"]
+                questions.append(Question(m["ts"], question, m["sender_id"]))
+                evidence[normalize(question)].append({
+                    "question": question, "chat_id": chat_id, "question_id": m["msg_id"],
+                    "message_id": m["msg_id"], "text": question, "kind": "question",
+                })
             for m in messages:
                 direct = m["reply_to"] is not None
                 target = m["reply_to"] if direct else inferred.get(m["msg_id"])

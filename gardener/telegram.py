@@ -38,7 +38,10 @@ def format_message(draft: dict) -> str:
         group = str(source["chat_id"])
         msg = source["message_id"]
         ref = f"https://t.me/c/{group[4:]}/{msg}" if group.startswith("-100") else f"group {group}, message {msg}"
-        lines.extend(["", f"{source['kind']} · {ref}", f"Question: {source['question']}", source["text"]])
+        lines.extend(["", f"{source['kind']} · {ref}"])
+        if source["kind"] != "question":
+            lines.append(f"Question: {source['question']}")
+        lines.append(source["text"])
     return "\n".join(lines).strip()
 
 
