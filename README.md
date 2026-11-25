@@ -61,6 +61,24 @@ Use a separate bot token from the answer bot. Each id in `ADMIN_USER_IDS` must o
 
 While the watch process is running, any private message from an admin runs a pass and replies in that chat. A gap or a question decision already delivered is not sent again. The same question is sent again when its decision changes. `docker compose run --rm gardener` exits, so it does not hear messages. A command-line `--dry-run` still only prints and does not remember what it printed.
 
+### Review past questions
+
+In watch mode, send these commands to Gardener in a private admin chat. Dates use `YYYY-MM-DD` and include both endpoints in UTC.
+
+| Command | What it does |
+| --- | --- |
+| `/review START END [PAGE]` | Browse past questions in the selected groups and answer bot query log, newest first. |
+| `/review_search START END PAGE WORDS` | Find questions containing all the search words. Start with page 1. |
+| `/review_open ID` | Check a question against the current FAQ and look for archived chat answers. |
+| `/review_save ID` | Save the suggestion from the review card you just opened. |
+| `/review_saved [PAGE]` | List saved suggestions. |
+| `/review_draft ID` | Reopen a saved suggestion and its review context. |
+| `/review_edit ID ANSWER` | Replace the answer in a saved suggestion. |
+
+Each page checks a batch of messages. A page can have no questions and still offer a next page. Search filters by text before checking messages.
+
+Questions asked once and questions already shown in an automatic report are available for manual review. A recorded bot response appears as context. Suggested answers use source messages from `FAQ_CHAT_IDS`. Admins can also save a question with its answer left open. Saved suggestions and edits live in `GARDENER_DB`.
+
 ### Do questions asked directly in the group trigger it?
 
 Set `FAQ_CHAT_IDS` to a comma-separated list of group IDs that the answer bot archives. Each database pass reads those groups within `SINCE_DAYS` alongside the query log. An empty list disables archive scanning. An explicit `--questions` export remains a standalone input.

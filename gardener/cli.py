@@ -22,8 +22,9 @@ from .faq_index import huggingface_embedder, index_pages, index_repo, pages_from
 from .graph import compile_graph, question_decisions
 from .llm import LLM, get_llm
 from .questions import load_export, load_sqlite, normalize
+from .review import HistoryReview
 from .telegram import (
-    admin_private_chats,
+    admin_private_messages,
     advance_offset,
     format_message,
     get_updates,
@@ -34,6 +35,17 @@ from .telegram import (
 )
 
 log = logging.getLogger("gardener")
+
+
+def _faq_index(settings, model, faq_dir, faq_pages):
+    if faq_pages is None and faq_dir is not None:
+        faq_pages = pages_from_dir(faq_dir)
+    options = dict(
+        embed_model=model, site=settings.faq_site, cache_dir=settings.faq_cache, top_k=settings.top_k,
+    )
+    if faq_pages is not None:
+        return index_pages(faq_pages, **options)
+    return index_repo(settings.faq_repo, **options)
 
 
 def execute(
@@ -95,24 +107,7 @@ def execute(
     model = embed_model or huggingface_embedder(
         settings.embed_model, settings.hf_token, settings.embed_threads
     )
-    if faq_pages is None and faq_dir is not None:
-        faq_pages = pages_from_dir(faq_dir)
-    if faq_pages is not None:
-        index = index_pages(
-            faq_pages,
-            embed_model=model,
-            site=settings.faq_site,
-            cache_dir=settings.faq_cache,
-            top_k=settings.top_k,
-        )
-    else:
-        index = index_repo(
-            settings.faq_repo,
-            embed_model=model,
-            site=settings.faq_site,
-            cache_dir=settings.faq_cache,
-            top_k=settings.top_k,
-        )
+    index = _faq_index(settings, model, faq_dir, faq_pages)
 
     completer = llm or get_llm(settings)
     conn = store.connect(settings.gardener_db)
@@ -236,6 +231,7 @@ def pause_for_admin(
     *,
     offset: int | None,
     run_preview,
+    run_review=None,
     fetch=get_updates,
 ) -> int | None:
     """Wait out `seconds`, and run a dry-run reply when an admin writes."""
@@ -253,13 +249,18 @@ def pause_for_admin(
                 return offset
             continue
         offset = advance_offset(updates, offset)
-        for chat_id in dict.fromkeys(admin_private_chats(updates, settings.admin_ids)):
+        previewed = set()
+        for chat_id, text in admin_private_messages(updates, settings.admin_ids):
             try:
-                run_preview(chat_id)
+                if run_review is not None and run_review(chat_id, text):
+                    continue
+                if chat_id not in previewed:
+                    previewed.add(chat_id)
+                    run_preview(chat_id)
             except Exception:
-                log.exception("dry run for %s failed", chat_id)
+                log.exception("admin request for %s failed", chat_id)
                 try:
-                    send_text(settings.telegram_token, chat_id, "Dry run failed.")
+                    send_text(settings.telegram_token, chat_id, "Admin request failed.")
                 except Exception:
                     log.warning("could not report the dry-run failure to %s", chat_id, exc_info=True)
     return offset
@@ -292,6 +293,9 @@ def watch(
     held_llm = llm
     offset: int | None = None
     hear = listen and bool(settings.telegram_token) and bool(settings.admin_ids)
+    review = HistoryReview(
+        settings, lambda: held_llm, lambda: _faq_index(settings, held_embed, faq_dir, faq_pages),
+    )
     log.info("watching every %s seconds", interval)
     if hear:
         log.info("private messages from admins run a dry run and are not saved")
@@ -320,6 +324,13 @@ def watch(
         except Exception:
             log.exception("watch pass failed")
         if hear:
+            def run_review(chat_id: int, text: str) -> bool:
+                send_kwargs = {} if opener is None else {"opener": opener}
+                return review.handle(
+                    chat_id, text,
+                    lambda message: send_text(settings.telegram_token, chat_id, message, **send_kwargs),
+                )
+
             def run_preview(chat_id: int) -> None:
                 nonlocal held_embed, held_llm
                 if held_embed is None:
@@ -346,6 +357,7 @@ def watch(
                 interval,
                 offset=offset,
                 run_preview=run_preview,
+                run_review=run_review,
             )
             if stop.is_set():
                 break
