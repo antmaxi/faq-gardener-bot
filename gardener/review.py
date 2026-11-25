@@ -5,15 +5,14 @@ from __future__ import annotations
 import json
 from contextlib import closing
 from datetime import date, datetime, time, timedelta, timezone
-from time import monotonic
 
 from . import store
-from .history import assess, load_history, load_item
+from .history import assess, load_history_page, load_item
 from .questions import normalize
 from .telegram import message_reference, split_message
 
 _PAGE_SIZE = 10
-_RANGE_CACHE_SECONDS = 300
+_ARCHIVE_PAGE_SIZE = 24
 
 _HELP = """Review past questions (dates are inclusive, UTC)
 /review START END [PAGE]
@@ -90,7 +89,6 @@ class HistoryReview:
         self.settings = settings
         self.get_llm = get_llm
         self.get_index = get_index
-        self.range_cache = None
         self.open_cards = {}
 
     def handle(self, chat_id: int, text: str, send) -> bool:
@@ -147,24 +145,23 @@ class HistoryReview:
         page = _page(fields[2] if len(fields) > 2 else "1")
         since, until = _range(start, end)
         terms = normalize(fields[3]).split() if search else []
-        if (
-            self.range_cache is None
-            or self.range_cache[:2] != (since, until)
-            or monotonic() >= self.range_cache[2]
-        ):
-            items = load_history(self.settings, since, until, self.get_llm())
-            self.range_cache = (since, until, monotonic() + _RANGE_CACHE_SECONDS, items)
-        items = self.range_cache[3]
+        items, more = load_history_page(
+            self.settings, since, until, self.get_llm(),
+            terms=terms, page=page, page_size=_ARCHIVE_PAGE_SIZE,
+        )
         rows = [
             f"{item.date} · {_preview(item.text)}\n/review_open {item.key}"
             for item in items
-            if all(term in normalize(item.text) for term in terms)
         ]
         next_command = (
             f"/review_search {start} {end} {page + 1} {fields[3]}" if search
             else f"/review {start} {end} {page + 1}"
         )
-        return _listing(rows, page, next_command)
+        if not rows:
+            rows.append("No questions on this page.")
+        if more:
+            rows.append(f"Next page · {next_command}")
+        return "\n\n".join(rows)
 
 
 def _preview(text: str) -> str:

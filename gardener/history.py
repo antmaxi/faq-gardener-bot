@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+from collections import defaultdict
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +15,7 @@ from .chat import _classify, _NEARBY, _WINDOW
 from .config import Settings
 from .graph import grade_label, parse_json_object
 from .llm import LLM
-from .questions import _id_list, _ro_uri
+from .questions import _id_list, _ro_uri, normalize
 from .telegram import message_reference
 
 _ASSESS = """Assess whether the supplied Telegram messages answer the question.
@@ -24,6 +26,11 @@ Draft in the question's language. Leave conflicting details open and state both
 claims. Return JSON with status ("answered", "partial", "conflicting", or "none"),
 sources (a list of numbered message IDs from this input), and suggestion (text
 grounded in the selected sources, or an empty string for "none")."""
+
+_SEARCH_STOP_WORDS = frozenset(
+    "and are can could does how the what when where which who would you "
+    "где как кто куда можно или для это что чем при почему когда".split()
+)
 
 
 @dataclass(frozen=True)
@@ -56,37 +63,58 @@ def _columns(conn, table):
     return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def load_history(settings: Settings, since: int, until: int, llm: LLM) -> list[ReviewItem]:
+def load_history_page(
+    settings: Settings, since: int, until: int, llm: LLM, *,
+    terms: list[str], page: int, page_size: int,
+) -> tuple[list[ReviewItem], bool]:
+    """Filter first, then classify a bounded page of archive messages."""
+    groups = sorted(settings.faq_chat_ids)
+    chat_slots = ",".join("?" for _ in groups)
+    group_rows = ""
+    params = [since, until]
+    if groups:
+        group_rows = f"""
+            UNION ALL
+            SELECT 'g:' || chat_id || ':' || msg_id, ts, text, chat_id, msg_id, sender_id, reply_to
+            FROM messages WHERE ts >= ? AND ts < ? AND chat_id IN ({chat_slots})
+        """
+        params.extend([since, until, *groups])
+    contains = " AND instr(normalize_text(text), ?) > 0" * len(terms)
     with _archive(settings.answerbot_db) as conn:
-        items = [
-            ReviewItem(f"q:{row['id']}", row["ts"], row["question"].strip())
-            for row in conn.execute(
-                """SELECT id, ts, question FROM query_log
-                   WHERE ts >= ? AND ts < ? AND trim(question) != ''""",
-                (since, until),
-            )
-        ]
-        for chat in sorted(settings.faq_chat_ids):
-            messages = [dict(row) for row in conn.execute(
-                """SELECT msg_id, ts, sender_id, reply_to, text FROM messages
-                   WHERE chat_id = ? AND ts >= ? AND ts < ? AND trim(text) != ''
-                   ORDER BY ts, msg_id""",
-                (chat, since, until),
-            )]
-            selected, _ = _classify(messages, frozenset(), settings.min_question_words, llm)
-            items.extend(
-                ReviewItem(f"g:{chat}:{msg}", row["ts"], row["text"].strip())
-                for msg, row in selected.items()
-            )
-    return sorted(items, key=lambda item: (item.ts, item.key), reverse=True)
+        conn.create_function("normalize_text", 1, normalize, deterministic=True)
+        rows = conn.execute(
+            f"""SELECT * FROM (
+                  SELECT 'q:' || id AS key, ts, question AS text, NULL AS chat_id,
+                         NULL AS msg_id, NULL AS sender_id, NULL AS reply_to
+                  FROM query_log WHERE ts >= ? AND ts < ?
+                  {group_rows}
+                )
+                WHERE trim(text) != '' {contains}
+                ORDER BY ts DESC, key DESC LIMIT ? OFFSET ?""",
+            (*params, *terms, page_size + 1, (page - 1) * page_size),
+        ).fetchall()
+
+    by_chat = defaultdict(list)
+    items = []
+    for row in rows[:page_size]:
+        if row["chat_id"] is None:
+            items.append(ReviewItem(row["key"], row["ts"], row["text"].strip()))
+        else:
+            by_chat[row["chat_id"]].append(dict(row))
+    for messages in by_chat.values():
+        selected, _ = _classify(list(reversed(messages)), frozenset(), settings.min_question_words, llm)
+        items.extend(
+            ReviewItem(row["key"], row["ts"], row["text"].strip()) for row in selected.values()
+        )
+    return sorted(items, key=lambda item: (item.ts, item.key), reverse=True), len(rows) > page_size
 
 
-def _group_candidates(conn, chat: int, message: int, ts: int) -> list[dict]:
+def _group_candidates(conn, chat: int, message: int, ts: int, *, limit: int = 24) -> list[dict]:
     linked = conn.execute(
         """SELECT chat_id, msg_id, text FROM messages
            WHERE chat_id = ? AND reply_to = ? AND msg_id != ? AND trim(text) != ''
-           ORDER BY ts, msg_id""",
-        (chat, message, message),
+           ORDER BY ts, msg_id LIMIT ?""",
+        (chat, message, message, limit),
     )
     sources = [dict(row, kind="Direct reply") for row in linked]
     nearby = conn.execute(
@@ -124,6 +152,33 @@ def _cited_candidates(conn, ids: list[int], chat_ids: frozenset[int]) -> list[di
     return list(sources.values())
 
 
+def _search_candidates(conn, question: str, ts: int, groups: frozenset[int]) -> list[dict]:
+    """Find related messages and inspect replies to questions found in the archive."""
+    terms = list(dict.fromkeys(
+        word for word in re.findall(r"[^\W\d_]{3,}", question.lower())
+        if word not in _SEARCH_STOP_WORDS
+    ))[:12]
+    if not terms or not groups:
+        return []
+    conn.create_function("normalize_text", 1, normalize, deterministic=True)
+    matches = " + ".join("(instr(normalize_text(text), ?) > 0)" for _ in terms)
+    chat_slots = ",".join("?" for _ in groups)
+    hits = conn.execute(
+        f"""SELECT chat_id, msg_id, ts, text, {matches} AS relevance
+            FROM messages WHERE chat_id IN ({chat_slots}) AND relevance > 0
+            ORDER BY relevance DESC, ABS(ts - ?), chat_id, msg_id LIMIT 8""",
+        (*terms, *sorted(groups), ts),
+    ).fetchall()
+    sources = {}
+    for hit in hits:
+        chat, msg = hit["chat_id"], hit["msg_id"]
+        sources.setdefault((chat, msg), dict(hit, kind="Inferred match"))
+        for reply in _group_candidates(conn, chat, msg, hit["ts"], limit=4):
+            reply["kind"] = "Inferred match"
+            reply["context"] = hit["text"]
+            sources[(chat, reply["msg_id"])] = reply
+    return list(sources.values())
+
 def load_item(settings: Settings, key: str) -> tuple[ReviewItem, list[dict]]:
     parts = key.split(":")
     with _archive(settings.answerbot_db) as conn:
@@ -152,10 +207,10 @@ def load_item(settings: Settings, key: str) -> tuple[ReviewItem, list[dict]]:
                     ids = _id_list(row["citations"])
                 except (TypeError, ValueError):
                     ids = []
-                return (
-                    ReviewItem(f"q:{query_id}", row["ts"], row["question"].strip(), row["answer"] or ""),
-                    _cited_candidates(conn, ids, settings.faq_chat_ids),
-                )
+                item = ReviewItem(f"q:{query_id}", row["ts"], row["question"].strip(), row["answer"] or "")
+                sources = _cited_candidates(conn, ids, settings.faq_chat_ids)
+                sources.extend(_search_candidates(conn, item.text, item.ts, settings.faq_chat_ids))
+                return item, list({(s["chat_id"], s["msg_id"]): s for s in sources}.values())
     raise ValueError("Question not found.")
 
 
@@ -175,7 +230,7 @@ def assess(item: ReviewItem, candidates: list[dict], llm: LLM, index, top_k: int
     payload = {
         "question": item.text,
         "messages": [
-            {"id": n, "kind": row["kind"], "text": row["text"]}
+            {"id": n, "kind": row["kind"], "text": row["text"], "context": row.get("context")}
             for n, row in enumerate(candidates, 1)
         ],
     }

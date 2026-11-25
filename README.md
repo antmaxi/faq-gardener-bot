@@ -75,6 +75,8 @@ In watch mode, send these commands to Gardener in a private admin chat. Dates us
 | `/review_draft ID` | Reopen a saved suggestion and its review context. |
 | `/review_edit ID ANSWER` | Replace the answer in a saved suggestion. |
 
+Each page checks a batch of messages. A page can have no questions and still offer a next page. Search filters by text before checking messages.
+
 Questions asked once and questions already shown in an automatic report are available for manual review. A recorded bot response appears as context. Suggested answers use source messages from `FAQ_CHAT_IDS`. Admins can also save a question with its answer left open. Saved suggestions and edits live in `GARDENER_DB`.
 
 ### Do questions asked directly in the group trigger it?
