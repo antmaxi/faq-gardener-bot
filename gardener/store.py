@@ -30,8 +30,50 @@ def connect(path: Path) -> sqlite3.Connection:
              label TEXT NOT NULL
            )"""
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS faq_suggestions (
+             key TEXT PRIMARY KEY,
+             saved_at INTEGER NOT NULL,
+             card TEXT NOT NULL,
+             answer TEXT NOT NULL
+           )"""
+    )
     conn.commit()
     return conn
+
+
+def save_suggestion(conn: sqlite3.Connection, card: dict) -> None:
+    with conn:
+        conn.execute(
+            """INSERT INTO faq_suggestions (key, saved_at, card, answer)
+               VALUES (?, ?, ?, ?) ON CONFLICT(key) DO NOTHING""",
+            (card["key"], int(time.time()), json.dumps(card, ensure_ascii=False), card["suggestion"]),
+        )
+
+
+def get_suggestion(conn: sqlite3.Connection, key: str) -> dict | None:
+    row = conn.execute("SELECT card, answer FROM faq_suggestions WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return None
+    card = json.loads(row[0])
+    card["suggestion"] = row[1]
+    return card
+
+
+def list_suggestions(conn: sqlite3.Connection, *, limit: int, offset: int) -> list[dict]:
+    return [
+        json.loads(row[0]) for row in conn.execute(
+            "SELECT card FROM faq_suggestions ORDER BY saved_at DESC, key LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+    ]
+
+
+def edit_suggestion(conn: sqlite3.Connection, key: str, answer: str) -> bool:
+    with conn:
+        return conn.execute(
+            "UPDATE faq_suggestions SET answer = ? WHERE key = ?", (answer, key)
+        ).rowcount > 0
 
 
 def seen(conn: sqlite3.Connection, fingerprint: str) -> bool:

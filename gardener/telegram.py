@@ -21,6 +21,13 @@ _LIMIT = 4096
 _BODY = 4080
 
 
+def message_reference(chat_id: int, msg_id: int) -> str:
+    group = str(chat_id)
+    if group.startswith("-100") and len(group) > 4:
+        return f"https://t.me/c/{group[4:]}/{msg_id}"
+    return f"group {group}, message {msg_id}"
+
+
 def format_message(draft: dict) -> str:
     """Plain text an admin can paste from. No user ids."""
     lines = [
@@ -35,9 +42,7 @@ def format_message(draft: dict) -> str:
     lines.append("")
     lines.append(draft.get("outline") or "")
     for source in draft.get("sources", []):
-        group = str(source["chat_id"])
-        msg = source["message_id"]
-        ref = f"https://t.me/c/{group[4:]}/{msg}" if group.startswith("-100") else f"group {group}, message {msg}"
+        ref = message_reference(source["chat_id"], source["message_id"])
         lines.extend(["", f"{source['kind']} · {ref}"])
         if source["kind"] != "question":
             lines.append(f"Question: {source['question']}")
@@ -132,7 +137,13 @@ def advance_offset(updates: list[dict], offset: int | None) -> int | None:
 
 def admin_private_chats(updates: list[dict], admin_ids: set[int] | frozenset[int]) -> list[int]:
     """Chat ids for private texts from admins, in arrival order."""
-    chats: list[int] = []
+    return [chat_id for chat_id, _ in admin_private_messages(updates, admin_ids)]
+
+
+def admin_private_messages(
+    updates: list[dict], admin_ids: set[int] | frozenset[int]
+) -> list[tuple[int, str]]:
+    messages = []
     for update in updates:
         message = update.get("message") or {}
         chat = message.get("chat") or {}
@@ -142,8 +153,8 @@ def admin_private_chats(updates: list[dict], admin_ids: set[int] | frozenset[int
         text = str(message.get("text") or "").strip()
         if not text or user is None or int(user) not in admin_ids:
             continue
-        chats.append(int(chat["id"]))
-    return chats
+        messages.append((int(chat["id"]), text))
+    return messages
 
 
 def format_decision(question: str, label: str, reason: str) -> str:
