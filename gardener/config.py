@@ -71,6 +71,8 @@ class Settings:
     top_k: int
     watch_seconds: int
 
+    faq_chat_ids: frozenset[int] = frozenset()
+
     def model_name(self) -> str:
         if self.answer_model:
             return self.answer_model
@@ -95,6 +97,7 @@ def load_settings() -> Settings:
         min_cluster_size=int(os.getenv("MIN_CLUSTER_SIZE", "2")),
         min_question_words=int(os.getenv("MIN_QUESTION_WORDS", "3")),
         cluster_cosine=float(os.getenv("CLUSTER_COSINE", "0.82")),
+        faq_chat_ids=_admins(os.getenv("FAQ_CHAT_IDS")),
         admin_ids=_admins(os.getenv("ADMIN_USER_IDS")),
         debug=_flag(os.getenv("DEBUG")),
         telegram_token=_optional(os.getenv("TELEGRAM_BOT_TOKEN")),

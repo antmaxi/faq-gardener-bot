@@ -34,6 +34,11 @@ def format_message(draft: dict) -> str:
         lines.append(f"- {question}")
     lines.append("")
     lines.append(draft.get("outline") or "")
+    for source in draft.get("sources", []):
+        group = str(source["chat_id"])
+        msg = source["message_id"]
+        ref = f"https://t.me/c/{group[4:]}/{msg}" if group.startswith("-100") else f"group {group}, message {msg}"
+        lines.extend(["", f"{source['kind']} · {ref}", f"Question: {source['question']}", source["text"]])
     return "\n".join(lines).strip()
 
 

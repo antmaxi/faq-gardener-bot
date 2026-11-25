@@ -61,6 +61,12 @@ Use a separate bot token from the answer bot. Each id in `ADMIN_USER_IDS` must o
 
 While the watch process is running, any private message from an admin runs a pass and replies in that chat. A gap or a question decision already delivered is not sent again. The same question is sent again when its decision changes. `docker compose run --rm gardener` exits, so it does not hear messages. A command-line `--dry-run` still only prints and does not remember what it printed.
 
+### Do questions asked directly in the group trigger it?
+
+Set `FAQ_CHAT_IDS` to a comma-separated list of group IDs that the answer bot archives. Each database pass reads those groups within `SINCE_DAYS` alongside the query log. An empty list disables archive scanning. An explicit `--questions` export remains a standalone input.
+
+The configured LLM reads selected chat messages to identify questions and clear requests for help. Two distinct wordings on a topic (by default) can trigger a FAQ coverage check, including unanswered questions. A draft includes direct replies and flags inferred answers from the next six messages within 15 minutes in the same group. Admins receive the source text and message references. The drafting prompt leaves conflicting details open for review.
+
 ## Models
 
 `LLM_PROVIDER`:

@@ -16,11 +16,12 @@ import time
 from pathlib import Path
 
 from . import store
+from .chat import load_chat
 from .config import Settings, load_settings
 from .faq_index import huggingface_embedder, index_pages, index_repo, pages_from_dir
 from .graph import compile_graph, question_decisions
 from .llm import LLM, get_llm
-from .questions import load_export, load_sqlite
+from .questions import load_export, load_sqlite, normalize
 from .telegram import (
     admin_private_chats,
     advance_offset,
@@ -70,6 +71,16 @@ def execute(
             admin_ids=gap_admin_ids,
             min_words=settings.min_question_words,
         )
+    evidence = {}
+    if questions_path is None and settings.faq_chat_ids:
+        llm = llm or get_llm(settings)
+        archived, evidence = load_chat(
+            settings.answerbot_db, settings.faq_chat_ids, since_ts, gap_admin_ids, llm
+        )
+        unique = {}
+        for question in sorted(questions + archived, key=lambda q: q.ts, reverse=True):
+            unique.setdefault(normalize(question.text), question)
+        questions = list(unique.values())
     if not questions:
         log.info("no FAQ candidate questions")
         return {"questions": 0, "drafts": [], "delivered": 0, "decisions": []}
@@ -114,7 +125,7 @@ def execute(
             top_k=settings.top_k,
         )
         result = graph.invoke(
-            {"questions": [{"ts": q.ts, "text": q.text} for q in questions]}
+            {"questions": [{"ts": q.ts, "text": q.text, "sources": evidence.get(normalize(q.text), [])} for q in questions]}
         )
         drafts = list(result.get("drafts") or [])
         decisions = question_decisions(list(result.get("clusters") or []))
